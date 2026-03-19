@@ -4,6 +4,36 @@ export interface PipelineConfig {
   urdfXml?: string;
 }
 
+/* ── Success criteria (parsed from natural language) ───────────── */
+
+export interface SuccessCriteria {
+  base_drift_max: number | null;
+  joint_separation_max: number | null;
+  min_avg_height: number | null;
+  end_effector_reach_max: number | null;
+  settle_time_max: number | null;
+  nan_check: number | null;
+}
+
+export const EMPTY_CRITERIA: SuccessCriteria = {
+  base_drift_max: null,
+  joint_separation_max: null,
+  min_avg_height: null,
+  end_effector_reach_max: null,
+  settle_time_max: null,
+  nan_check: null,
+};
+
+/* ── Variable sweep types ──────────────────────────────────────── */
+
+export type SweepParam = "gravity" | "link_mass" | "joint_damping" | "timestep";
+
+export interface SweepConfig {
+  param: SweepParam;
+  min: number;
+  max: number;
+}
+
 /* ── Batch simulation types ─────────────────────────────────────── */
 
 export interface SimBodyConfig {
@@ -18,8 +48,12 @@ export interface SimRunConfig {
   gravity: number;
   friction: number;
   steps: number;
-  successThreshold: number;
+  criteria: SuccessCriteria | null;
   bodies: SimBodyConfig[];
+  sweepOverride?: {
+    param: SweepParam;
+    value: number;
+  };
 }
 
 export interface SimWorkerInput {

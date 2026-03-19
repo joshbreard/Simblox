@@ -36,15 +36,23 @@ addEventListener("message", async (e: MessageEvent<SimWorkerInput>) => {
     return;
   }
 
-  const { gravity, steps, successThreshold, bodies } = config;
+  const { gravity, steps, bodies, sweepOverride } = config;
   const rand = makePrng(randomSeed);
 
-  // Slightly randomize gravity per run (±5%)
-  const world = new RAPIER.World({
-    x: 0,
-    y: gravity * (0.95 + rand() * 0.1),
-    z: 0,
-  });
+  // Apply sweep override for gravity, or slightly randomize (±5%)
+  let effectiveGravity = gravity;
+  if (sweepOverride?.param === "gravity") {
+    effectiveGravity = sweepOverride.value;
+  } else {
+    effectiveGravity = gravity * (0.95 + rand() * 0.1);
+  }
+
+  const effectiveTimestep = sweepOverride?.param === "timestep" ? sweepOverride.value : undefined;
+
+  const world = new RAPIER.World({ x: 0, y: effectiveGravity, z: 0 });
+  if (effectiveTimestep !== undefined) {
+    world.timestep = effectiveTimestep;
+  }
 
   const dynamicBodies: RAPIER.RigidBody[] = [];
 
@@ -79,31 +87,99 @@ addEventListener("message", async (e: MessageEvent<SimWorkerInput>) => {
           ),
       );
 
+      // Apply sweep overrides for dynamic bodies
+      if (sweepOverride?.param === "joint_damping") {
+        body.setLinearDamping(sweepOverride.value);
+        body.setAngularDamping(sweepOverride.value);
+      }
+
       const fric = bc.friction * (0.9 + rand() * 0.2);
-      world.createCollider(
-        RAPIER.ColliderDesc.cuboid(...bc.halfExtents)
-          .setRestitution(bc.restitution)
-          .setFriction(fric),
-        body,
-      );
+      const colliderDesc = RAPIER.ColliderDesc.cuboid(...bc.halfExtents)
+        .setRestitution(bc.restitution)
+        .setFriction(fric);
+
+      if (sweepOverride?.param === "link_mass") {
+        colliderDesc.setMass(sweepOverride.value);
+      }
+
+      world.createCollider(colliderDesc, body);
       dynamicBodies.push(body);
     }
   }
 
-  // Run simulation, track minimum COM height
+  // Record initial positions for drift tracking
+  const initialPositions = dynamicBodies.map((b) => {
+    const p = b.translation();
+    return { x: p.x, y: p.y, z: p.z };
+  });
+
+  const criteria = config.criteria;
+
+  // Run simulation, tracking metrics for success criteria
   let minComHeight = Infinity;
+  let maxBaseDrift = 0;
+  let settleStep = -1;
+  let hasNaN = false;
+  const SETTLE_VEL_THRESHOLD = 0.01;
 
   for (let i = 0; i < steps; i++) {
     world.step();
 
     if (dynamicBodies.length > 0) {
       let totalY = 0;
-      for (const body of dynamicBodies) {
-        totalY += body.translation().y;
+      let totalVelSq = 0;
+      let stepMaxDrift = 0;
+
+      for (let bi = 0; bi < dynamicBodies.length; bi++) {
+        const body = dynamicBodies[bi];
+        const p = body.translation();
+        const v = body.linvel();
+
+        // NaN detection
+        if (isNaN(p.x) || isNaN(p.y) || isNaN(p.z) ||
+            isNaN(v.x) || isNaN(v.y) || isNaN(v.z)) {
+          hasNaN = true;
+        }
+
+        totalY += p.y;
+
+        // Base drift from initial position
+        const init = initialPositions[bi];
+        const dx = p.x - init.x;
+        const dz = p.z - init.z;
+        const drift = Math.sqrt(dx * dx + dz * dz);
+        if (drift > stepMaxDrift) stepMaxDrift = drift;
+
+        totalVelSq += v.x * v.x + v.y * v.y + v.z * v.z;
       }
+
       const comH = totalY / dynamicBodies.length;
       if (comH < minComHeight) minComHeight = comH;
+      if (stepMaxDrift > maxBaseDrift) maxBaseDrift = stepMaxDrift;
+
+      // Settle detection: first step where avg velocity magnitude < threshold
+      const avgVel = Math.sqrt(totalVelSq / dynamicBodies.length);
+      if (settleStep < 0 && avgVel < SETTLE_VEL_THRESHOLD) {
+        settleStep = i;
+      } else if (avgVel >= SETTLE_VEL_THRESHOLD) {
+        settleStep = -1; // reset if it unsettles
+      }
     }
+  }
+
+  // Evaluate success against parsed criteria (pass if none set)
+  let success = true;
+  if (criteria) {
+    if (criteria.min_avg_height !== null && minComHeight < criteria.min_avg_height) success = false;
+    if (criteria.base_drift_max !== null && maxBaseDrift > criteria.base_drift_max) success = false;
+    if (criteria.nan_check !== null && hasNaN) success = false;
+    if (criteria.settle_time_max !== null) {
+      const dt = effectiveTimestep ?? 1 / 60;
+      const settleTime = settleStep >= 0 ? settleStep * dt : steps * dt;
+      if (settleTime > criteria.settle_time_max) success = false;
+    }
+    // joint_separation_max and end_effector_reach_max require articulated bodies;
+    // skip when not applicable
   }
 
   // Collect final state
@@ -121,7 +197,7 @@ addEventListener("message", async (e: MessageEvent<SimWorkerInput>) => {
   postMessage({
     type: "result",
     runIndex,
-    success: minComHeight >= successThreshold,
+    success,
     minComHeight,
     steps,
     finalState,

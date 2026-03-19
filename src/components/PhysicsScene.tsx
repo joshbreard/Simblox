@@ -10,7 +10,6 @@ import {
   removeRobot,
   type SpawnedRobot,
 } from "@/lib/urdfPhysics";
-import { getSupabase } from "@/lib/supabase";
 import type { PipelineConfig } from "@/lib/types";
 
 // Singleton — calling RAPIER.init() more than once corrupts WASM state
@@ -18,10 +17,6 @@ let rapierReady: Promise<void> | null = null;
 function ensureRapier(): Promise<void> {
   if (!rapierReady) rapierReady = RAPIER.init();
   return rapierReady;
-}
-
-function generateUUID(): string {
-  return crypto.randomUUID();
 }
 
 interface PhysicsSceneProps {
@@ -33,9 +28,6 @@ export default function PhysicsScene({ config }: PhysicsSceneProps) {
   const spawnRef = useRef<((xml: string) => void) | null>(null);
   const applyConfigRef = useRef<((c: PipelineConfig) => void) | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [stepCount, setStepCount] = useState(0);
-  const [logStatus, setLogStatus] = useState<"idle" | "logging" | "ok" | "error">("idle");
-  const runIdRef = useRef(generateUUID());
 
   useEffect(() => {
     const container = containerRef.current;
@@ -182,45 +174,6 @@ export default function PhysicsScene({ config }: PhysicsSceneProps) {
         }
       };
 
-      // ── Supabase state logging ─────────────────────────────────
-      let step = 0;
-      const LOG_INTERVAL = 10;
-
-      function serializeWorld(): object {
-        const bodies: object[] = [];
-        world.bodies.forEach((body: RAPIER.RigidBody) => {
-          const t = body.translation();
-          const r = body.rotation();
-          const lv = body.linvel();
-          const av = body.angvel();
-          bodies.push({
-            handle: body.handle,
-            type: body.bodyType(),
-            translation: { x: t.x, y: t.y, z: t.z },
-            rotation: { x: r.x, y: r.y, z: r.z, w: r.w },
-            linvel: { x: lv.x, y: lv.y, z: lv.z },
-            angvel: { x: av.x, y: av.y, z: av.z },
-          });
-        });
-        return { bodies };
-      }
-
-      function logState(currentStep: number) {
-        const sb = getSupabase();
-        if (!sb) return;
-        const state = serializeWorld();
-        setLogStatus("logging");
-        sb.from("simulation_states")
-          .insert({
-            run_id: runIdRef.current,
-            step: currentStep,
-            state,
-          })
-          .then(({ error }) => {
-            setLogStatus(error ? "error" : "ok");
-          });
-      }
-
       // ── Animation loop ───────────────────────────────────────────
       let rafId: number;
       let alive = true;
@@ -229,13 +182,6 @@ export default function PhysicsScene({ config }: PhysicsSceneProps) {
         if (!alive) return;
 
         world.step();
-        step++;
-
-        // Log every N steps
-        if (step % LOG_INTERVAL === 0) {
-          setStepCount(step);
-          logState(step);
-        }
 
         // Sync box
         const bp = boxBody.translation();
@@ -251,7 +197,6 @@ export default function PhysicsScene({ config }: PhysicsSceneProps) {
         controls.update();
         renderer.render(scene, camera);
 
-        // Schedule next frame only after successful work
         rafId = requestAnimationFrame(animate);
       }
 
@@ -353,50 +298,6 @@ export default function PhysicsScene({ config }: PhysicsSceneProps) {
         }}
       >
         Drop URDF file here
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          top: 130,
-          left: 16,
-          padding: "8px 12px",
-          borderRadius: 6,
-          backgroundColor: "rgba(0, 0, 0, 0.5)",
-          color: "#ccc",
-          fontSize: 13,
-          fontFamily: "monospace",
-          zIndex: 10,
-          lineHeight: 1.6,
-          userSelect: "none",
-        }}
-      >
-        <div>Step: {stepCount}</div>
-        <div>
-          Log:{" "}
-          <span
-            style={{
-              color:
-                logStatus === "ok"
-                  ? "#4caf50"
-                  : logStatus === "error"
-                    ? "#f44336"
-                    : logStatus === "logging"
-                      ? "#ff9800"
-                      : "#888",
-            }}
-          >
-            {logStatus === "idle"
-              ? "waiting"
-              : logStatus === "logging"
-                ? "writing..."
-                : logStatus === "ok"
-                  ? "saved"
-                  : "error"}
-          </span>
-        </div>
-        <div style={{ color: "#666", fontSize: 11 }}>
-          run: {runIdRef.current.slice(0, 8)}
-        </div>
       </div>
     </div>
   );
