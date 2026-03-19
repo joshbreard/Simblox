@@ -168,18 +168,34 @@ addEventListener("message", async (e: MessageEvent<SimWorkerInput>) => {
   }
 
   // Evaluate success against parsed criteria (pass if none set)
+  const BASE_DRIFT_EPSILON = 1e-6;
+
   let success = true;
   if (criteria) {
-    if (criteria.min_avg_height !== null && minComHeight < criteria.min_avg_height) success = false;
-    if (criteria.base_drift_max !== null && maxBaseDrift > criteria.base_drift_max) success = false;
-    if (criteria.nan_check !== null && hasNaN) success = false;
+    if (criteria.min_avg_height !== null && minComHeight < criteria.min_avg_height) {
+      success = false;
+    }
+
+    if (criteria.base_drift_max !== null) {
+      // Clamp threshold to at least epsilon so physics-solver noise doesn't cause false failures
+      const driftThreshold = Math.max(criteria.base_drift_max, BASE_DRIFT_EPSILON);
+      if (maxBaseDrift > driftThreshold) success = false;
+    }
+
+    if (criteria.nan_check !== null && hasNaN) {
+      success = false;
+    }
+
     if (criteria.settle_time_max !== null) {
       const dt = effectiveTimestep ?? 1 / 60;
       const settleTime = settleStep >= 0 ? settleStep * dt : steps * dt;
       if (settleTime > criteria.settle_time_max) success = false;
     }
-    // joint_separation_max and end_effector_reach_max require articulated bodies;
-    // skip when not applicable
+
+    // joint_separation_max and end_effector_reach_max require articulated bodies
+    // which are not present in this rigid-body sim — skip evaluation.
+    // Non-null values are intentionally ignored (not treated as pass or fail)
+    // since we have no data to evaluate them against.
   }
 
   // Collect final state
