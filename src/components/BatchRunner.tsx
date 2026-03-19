@@ -56,8 +56,10 @@ interface RunResult {
 
 export default function BatchRunner({
   config,
+  projectId,
 }: {
   config: PipelineConfig | null;
+  projectId: string;
 }) {
   const [numRuns, setNumRuns] = useState(50);
   const [logInterval, setLogInterval] = useState(300);
@@ -229,6 +231,7 @@ export default function BatchRunner({
           if (sb) {
             sb.from("batch_runs")
               .insert({
+                project_id: projectId,
                 batch_id: batchId,
                 run_index: data.runIndex,
                 success: data.success,
@@ -278,7 +281,7 @@ export default function BatchRunner({
       workersRef.current.push(worker);
       assignWork(worker);
     }
-  }, [running, numRuns, config, confirmed, parsedCriteria, nlInput, sweepEnabled, sweepConfig]);
+  }, [running, numRuns, config, confirmed, parsedCriteria, nlInput, sweepEnabled, sweepConfig, projectId]);
 
   const successCount = results.filter((r) => r.success).length;
   const failCount = results.length - successCount;
