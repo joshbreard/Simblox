@@ -99,7 +99,7 @@ addEventListener("message", async (e: MessageEvent<SimWorkerInput>) => {
         .setFriction(fric);
 
       if (sweepOverride?.param === "link_mass") {
-        colliderDesc.setMass(sweepOverride.value);
+        colliderDesc.setMass(Math.max(0.001, sweepOverride.value));
       }
 
       world.createCollider(colliderDesc, body);
