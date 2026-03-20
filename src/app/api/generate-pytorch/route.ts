@@ -1,22 +1,48 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-const SYSTEM_PROMPT = `You are an expert PyTorch ML engineer. The user will describe what ML model they want to build for a robotics physics simulation dataset. You will be given the database schema of available training data.
+const SYSTEM_PROMPT = `You are an expert PyTorch ML engineer generating training scripts for a robotics physics simulator.
 
-Generate a complete, runnable Python PyTorch script that:
-- Accepts a JSON file path as sys.argv[1] (array of batch_run rows from Supabase)
-- Parses the JSON and extracts appropriate features and labels based on the user's description
-- Defines a PyTorch model class appropriate to the task (MLP, LSTM, or other if justified)
-- Trains the model for 100 epochs with Adam optimizer, prints loss every 10 epochs
-- Saves the trained model to model.pt using torch.save in the same directory as the script
+The batch_runs table schema is:
+- id: uuid
+- project_id: uuid
+- success: boolean (cast to int: 1=pass, 0=fail)
+- min_com_height: float (minimum center-of-mass height during simulation)
+- steps_run: int (how many physics steps ran)
+- sweep_value: float or null (the value of the swept parameter)
+- sweep_variable: string or null (name of swept parameter e.g. "gravity")
+- config: dict with keys { gravity: float, friction: float, steps: int }
+- final_state: list of dicts { position: [x,y,z], velocity: [x,y,z] } one per rigid body
+
+Example row:
+{
+  "success": true,
+  "min_com_height": 0.412,
+  "steps_run": 500,
+  "sweep_value": -9.81,
+  "sweep_variable": "gravity",
+  "config": { "gravity": -9.81, "friction": 0.7, "steps": 500 },
+  "final_state": [
+    { "position": [0, -0.05, 0], "velocity": [0, 0, 0] },
+    { "position": [0.01, 0.38, 0.02], "velocity": [0.001, -0.003, 0] }
+  ]
+}
+
+Generate a complete runnable Python PyTorch script that:
+- Accepts a JSON file path as sys.argv[1]
+- Correctly parses the nested config dict for gravity and friction using row['config']['gravity'] and row['config']['friction']
+- Casts boolean success to int: int(row['success'])
+- Handles null sweep_value by substituting 0.0
+- Uses only: torch, numpy, json, sys, os (no pandas, sklearn, or other third-party libraries)
+- Normalizes all input features using min-max normalization computed from training data, with a zero-range guard
+- Splits data 80/20 into train and validation sets
+- Trains for 100 epochs with Adam optimizer (lr=0.001), prints train loss and val loss every 10 epochs
+- Saves model weights only (not full model) to model.pt in the same directory as the script using torch.save(model.state_dict(), ...)
+- Prints a final summary: feature count, sample count, final train loss, final val loss, model architecture
+- Defines loss_val = 0.0 before the training loop so it is always in scope for the final print
 - Is complete and runnable with: python train.py data.json
 
-Rules:
-- Only use: torch, numpy, json, sys, os (no pandas, sklearn, etc.)
-- Handle missing/null values by replacing with 0.0
-- Normalize input features using min-max normalization computed from the training data
-- Print a final summary: feature count, sample count, final loss, model architecture
-- Return ONLY the Python code, no markdown, no explanation`;
+Return ONLY valid Python code. No markdown fences, no explanation, no comments outside the code.`;
 
 export async function POST(req: Request) {
   try {
@@ -50,7 +76,7 @@ export async function POST(req: Request) {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: "gpt-5.4",
         temperature: 0,
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
