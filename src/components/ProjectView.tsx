@@ -15,12 +15,20 @@ const NodeGraph = dynamic(() => import("@/components/NodeGraph"), {
 const BatchRunner = dynamic(() => import("@/components/BatchRunner"), {
   ssr: false,
 });
+const MLTrainingPanel = dynamic(
+  () => import("@/components/MLTrainingPanel"),
+  { ssr: false }
+);
 
 const DEFAULT_W = 420;
 const MIN_W = 200;
 const COLLAPSE_THRESHOLD = 80;
 
+const RIGHT_DEFAULT_W = 360;
+const RIGHT_MIN_W = 200;
+
 export default function ProjectView({ projectId }: { projectId: string }) {
+  /* ── Left sidebar state ──────────────────────── */
   const [sidebarW, setSidebarW] = useState(DEFAULT_W);
   const [config, setConfig] = useState<PipelineConfig | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -30,6 +38,15 @@ export default function ProjectView({ projectId }: { projectId: string }) {
   const [projectName, setProjectName] = useState("");
 
   const collapsed = sidebarW < COLLAPSE_THRESHOLD;
+
+  /* ── Right panel state ───────────────────────── */
+  const [rightPanelW, setRightPanelW] = useState(RIGHT_DEFAULT_W);
+  const [rightDragging, setRightDragging] = useState(false);
+  const rightStartXRef = useRef(0);
+  const rightStartWRef = useRef(0);
+  const rightLastWRef = useRef(RIGHT_DEFAULT_W);
+
+  const rightCollapsed = rightPanelW < COLLAPSE_THRESHOLD;
 
   useEffect(() => {
     const sb = getSupabase();
@@ -43,6 +60,7 @@ export default function ProjectView({ projectId }: { projectId: string }) {
       });
   }, [projectId]);
 
+  /* ── Left sidebar drag ───────────────────────── */
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
       e.preventDefault();
@@ -77,6 +95,46 @@ export default function ProjectView({ projectId }: { projectId: string }) {
       return w < COLLAPSE_THRESHOLD ? lastWRef.current : 0;
     });
   }, []);
+
+  /* ── Right panel drag ────────────────────────── */
+  const onRightPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault();
+      rightStartXRef.current = e.clientX;
+      rightStartWRef.current = rightPanelW;
+      setRightDragging(true);
+
+      const onMove = (ev: PointerEvent) => {
+        // Dragging left increases width, dragging right decreases
+        const delta = rightStartXRef.current - ev.clientX;
+        const next = rightStartWRef.current + delta;
+        if (next >= RIGHT_MIN_W)
+          rightLastWRef.current = Math.max(RIGHT_MIN_W, next);
+        setRightPanelW(
+          next < COLLAPSE_THRESHOLD ? 0 : Math.max(RIGHT_MIN_W, next)
+        );
+      };
+
+      const onUp = () => {
+        setRightDragging(false);
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+      };
+
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [rightPanelW]
+  );
+
+  const rightToggle = useCallback(() => {
+    setRightPanelW((w) => {
+      if (w >= COLLAPSE_THRESHOLD) rightLastWRef.current = w;
+      return w < COLLAPSE_THRESHOLD ? rightLastWRef.current : 0;
+    });
+  }, []);
+
+  const anyDragging = dragging || rightDragging;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", width: "100vw", height: "100vh", overflow: "hidden" }}>
@@ -115,11 +173,11 @@ export default function ProjectView({ projectId }: { projectId: string }) {
           display: "flex",
           flex: 1,
           overflow: "hidden",
-          cursor: dragging ? "col-resize" : undefined,
-          userSelect: dragging ? "none" : undefined,
+          cursor: anyDragging ? "col-resize" : undefined,
+          userSelect: anyDragging ? "none" : undefined,
         }}
       >
-        {/* ── Sidebar ─────────────────────────────────── */}
+        {/* ── Left Sidebar ──────────────────────────────── */}
         <div
           style={{
             width: collapsed ? 0 : sidebarW,
@@ -135,7 +193,7 @@ export default function ProjectView({ projectId }: { projectId: string }) {
           </div>
         </div>
 
-        {/* ── Resize handle ───────────────────────────── */}
+        {/* ── Left Resize handle ────────────────────────── */}
         <div
           onPointerDown={onPointerDown}
           style={{
@@ -150,7 +208,7 @@ export default function ProjectView({ projectId }: { projectId: string }) {
           }}
         />
 
-        {/* ── Toggle button ─────────────────────────── */}
+        {/* ── Left Toggle button ──────────────────────── */}
         <button
           onClick={toggle}
           style={{
@@ -174,10 +232,71 @@ export default function ProjectView({ projectId }: { projectId: string }) {
           {collapsed ? "\u25B6" : "\u25C0"}
         </button>
 
-        {/* ── Viewport ────────────────────────────────── */}
+        {/* ── Viewport ──────────────────────────────────── */}
         <div style={{ flex: 1, position: "relative" }}>
           <PhysicsScene config={config} />
           <BatchRunner config={config} projectId={projectId} />
+        </div>
+
+        {/* ── Right Resize handle ───────────────────────── */}
+        <div
+          onPointerDown={onRightPointerDown}
+          style={{
+            position: "absolute",
+            right: rightCollapsed ? 0 : rightPanelW - 3,
+            top: 36,
+            width: 6,
+            height: "calc(100% - 36px)",
+            cursor: "col-resize",
+            zIndex: 40,
+            transition: rightDragging ? "none" : "right 0.3s ease",
+          }}
+        />
+
+        {/* ── Right Toggle button ─────────────────────── */}
+        <button
+          onClick={rightToggle}
+          style={{
+            position: "absolute",
+            right: rightCollapsed ? 0 : rightPanelW,
+            top: "50%",
+            transform: "translateY(-50%)",
+            zIndex: 50,
+            background: "#222",
+            color: "#aaa",
+            border: "1px solid #444",
+            borderRight: "none",
+            borderRadius: "4px 0 0 4px",
+            padding: "12px 5px",
+            cursor: "pointer",
+            fontSize: 12,
+            lineHeight: 1,
+            transition: rightDragging ? "none" : "right 0.3s ease",
+          }}
+        >
+          {rightCollapsed ? "\u25C0" : "\u25B6"}
+        </button>
+
+        {/* ── Right Panel (ML Training) ─────────────────── */}
+        <div
+          style={{
+            width: rightCollapsed ? 0 : rightPanelW,
+            flexShrink: 0,
+            overflow: "hidden",
+            transition: rightDragging ? "none" : "width 0.3s ease",
+            background: "#111118",
+            borderLeft: rightCollapsed ? "none" : "1px solid #333",
+            position: "relative",
+          }}
+        >
+          <div
+            style={{
+              width: Math.max(rightPanelW, RIGHT_MIN_W),
+              height: "100%",
+            }}
+          >
+            <MLTrainingPanel projectId={projectId} />
+          </div>
         </div>
       </div>
     </div>
