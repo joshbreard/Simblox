@@ -80,25 +80,24 @@ export default function ProjectSelector() {
     let projectId: string | null = null;
 
     const sb = getSupabase();
-    if (sb) {
-      const { data, error } = await sb
-        .from("projects")
-        .insert({ name: name.trim(), description: description.trim() || null })
-        .select("id")
-        .single();
-
-      if (error) {
-        console.error("Supabase insert error:", error);
-      }
-      if (data) {
-        projectId = data.id;
-      }
+    if (!sb) {
+      setSubmitting(false);
+      return;
     }
 
-    // Fallback: generate a local ID so the flow still works
-    if (!projectId) {
-      projectId = crypto.randomUUID();
+    const { data, error } = await sb
+      .from("projects")
+      .insert({ name: name.trim(), description: description.trim() || null })
+      .select("id")
+      .single();
+
+    if (error || !data) {
+      console.error("Supabase insert error:", error);
+      setSubmitting(false);
+      return;
     }
+
+    projectId = data.id;
 
     setName("");
     setDescription("");
